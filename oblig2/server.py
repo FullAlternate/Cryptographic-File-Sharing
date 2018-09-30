@@ -3,19 +3,29 @@ from AES import *
 from Crypto.PublicKey import RSA
 
 
-class TCPHandler(socketserver.StreamRequestHandler):
+class TCPHandler(socketserver.BaseRequestHandler):
     def handle(self):
-        self.rData = self.rfile.readline().strip().decode("utf-8")
+        self.rData = self.request.recv(1024).decode("utf-8")
         print("Connected to {}".format(self.client_address))
 
         key = b"RfUjXn2r5u7x!A%D*G-KaPdSgVkYp3s6"
+        #key = Random.new().read(AES.block_size)
+        print(key)
         self.enc = AES_Encryptor(key)
 
         self.string_list = self.rData.split(" ")
         self.method = self.string_list[0]
         self.ep = self.string_list[1]
 
-        print(self.rData)
+        self.body = self.rData.split("\n\n")[1]
+        print(self.body)
+        # print(self.rData)
+
+        pubKey = RSA.importKey(self.body.encode())
+
+        print(pubKey)
+
+
 
         #print(self.method)
 
@@ -24,13 +34,26 @@ class TCPHandler(socketserver.StreamRequestHandler):
 
         response = self.create_header()
 
-        response += str(self.data)
+        key_response = response + key.decode()
+
+        print(key_response.encode())
+        key_response = pubKey.encrypt(key_response.encode(), None)
+        print(key_response)
+        self.request.send(str(key_response).encode())
+
+        # response += c_symkey
+
+        #print(self.data)
+        #print(response)
+        msg_response = response + self.data
+        # response += str(self.data)
 
         #print(response)
 
-        response = self.enc.encrypt(response.encode(), key)
+        msg_response = self.enc.encrypt(msg_response.encode(), key)
 
-        self.request.send(response)
+        self.request.send(msg_response)
+
 
     def create_header(self):
         """
