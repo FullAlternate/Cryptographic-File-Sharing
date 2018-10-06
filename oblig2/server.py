@@ -1,59 +1,40 @@
 import socketserver
 from AES import *
 from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_OAEP
 
 
 class TCPHandler(socketserver.BaseRequestHandler):
     def handle(self):
+        """
+        Handles the client requests
+        """
+
+        # Receives full request from client
         self.rData = self.request.recv(1024).decode("utf-8")
         print("Connected to {}".format(self.client_address))
 
-        key = b"RfUjXn2r5u7x!A%D*G-KaPdSgVkYp3s6"
-        #key = Random.new().read(AES.block_size)
-        print(key)
-        self.enc = AES_Encryptor(key)
+        # Initializes symmetric key and AES encryptor for later use
+        self.key = b"RfUjXn2r5u7x!A%D*G-KaPdSgVkYp3s6"
+        self.enc = AES_Encryptor(self.key)
 
-        self.string_list = self.rData.split(" ")
-        self.method = self.string_list[0]
-        self.ep = self.string_list[1]
+        # Extracts method and endpoint requested from client
+        string_list = self.rData.split(" ")
+        method = string_list[0]
+        ep = string_list[1]
 
-        self.body = self.rData.split("\n\n")[1]
-        print(self.body)
-        # print(self.rData)
-
-        pubKey = RSA.importKey(self.body.encode())
-
-        print(pubKey)
-
-
-
-        #print(self.method)
-
-        self.the_ep = self.ep.split("%")[0]
+        # Reads end point and adds file signature if missing
+        self.the_ep = ep.split("%")[0]
         self.the_ep = self.the_ep.lstrip("/")
+        if self.the_ep.endswith(".txt") is False:
+            self.the_ep += ".txt"
 
-        response = self.create_header()
+        # Handles methods
+        if method == "POST":
+            self.handle_post()
 
-        key_response = response + key.decode()
-
-        print(key_response.encode())
-        key_response = pubKey.encrypt(key_response.encode(), None)
-        print(key_response)
-        self.request.send(str(key_response).encode())
-
-        # response += c_symkey
-
-        #print(self.data)
-        #print(response)
-        msg_response = response + self.data
-        # response += str(self.data)
-
-        #print(response)
-
-        msg_response = self.enc.encrypt(msg_response.encode(), key)
-
-        self.request.send(msg_response)
-
+        if method == "GET":
+            self.handle_get()
 
     def create_header(self):
         """
@@ -62,55 +43,80 @@ class TCPHandler(socketserver.BaseRequestHandler):
         """
         try:
             if self.the_ep == "server_message.txt":
-                self.file = open(self.the_ep, "r")
-                self.data = self.file.read()
-                self.file.close()
+                file = open(self.the_ep, "r")
+                self.data = file.read()
+                file.close()
 
             header = 'HTTP/1.1 200 OK\n'
 
-           # header += "Content-Disposistion: attachment; filename=" + self.the_ep + "\n"
             header += "Content-Length: " + str(len(self.data)) + "\n\n"
 
         except Exception as FileNotFoundError:
             header = 'HTTP/1.1 404 Not Found\n'
-            self.sData = '<html><body><center><h1>Error 404: File not found</h1></center></body></html>'.encode(
-                'utf-8')
+            self.sData = '<html><body><center><h1>Error 404: File not found</h1></center></body></html>'
 
             header += "Content-Type: text/html\n"
             header += "Content-Length: " + str(len(self.sData)) + "\n\n"
 
         return header
-class Server:
-    def __init__(self, port):
-        self.HOST = "localhost"
-        self.PORT = port
-        self.server = None
 
-    def create(self):
+    def handle_post(self):
         """
-        Initializes server
+        Handles a post request from the client by storing their public key, then using this key the symmetric key is
+        encrypted and sent as a response
         """
-        self.server = socketserver.TCPServer((self.HOST, self.PORT), TCPHandler)
+        body = self.rData.split("\n\n")[1]
 
-    def start(self):
-        """
-        Continually listens for requests
-        """
-        self.server.serve_forever()
+        print("RECEIVED PUBLIC KEY:\n", body)
+        pubKey = RSA.importKey(body.encode())
 
-    def stop(self):
+        response = self.create_header()
+        check = response.split("\n")[0]
+
+        # Creates a 404 file missing response and sends it to client if the file requested does not exists
+        if check == "HTTP/1.1 404 Not Found":
+            response += self.sData
+
+            self.request.send(response.encode())
+            print("\n\n404 - DONE\n\n")
+            return
+
+        key_response = response + self.key.decode()
+        print("\n1ST MESSAGE:\n", key_response)
+
+        RSA_encryptor = PKCS1_OAEP.new(pubKey)
+
+        print("\n\nENCRYPTING...")
+        key_response = RSA_encryptor.encrypt(key_response.encode())
+        print("\nENCRYPTED RESULT:\n", key_response)
+
+        self.request.send(str(key_response).encode())
+
+    def handle_get(self):
         """
-        Stops listening for requests and closes server
+        Handles a get request by encrypting the requested file data using AES and sending it as a response to client
         """
-        self.server.shutdown()
-        self.server.server_close()
+        response = self.create_header()
+        msg_response = response + self.data
+        print("2ND MESSAGE:\n", msg_response)
+
+        print("\n\nENCRYPTING...")
+        msg_response = self.enc.encrypt(msg_response.encode(), self.key)
+        print("\nENCRYPTED RESULT:\n", msg_response)
+
+        self.request.send(msg_response)
+        print("\n\nDONE\n\n")
 
 
 if __name__ == "__main__":
 
-    theServer = Server(8080)
-    theServer.create()
+    HOST = "localhost"
+    PORT = 8080
 
-    theServer.start()
-    theServer.server.allow_reuse_address(True)
-    theServer.stop()
+    server = socketserver.TCPServer((HOST, PORT), TCPHandler)
+
+    server.serve_forever()
+    server.allow_reuse_address(True)
+
+    server.shutdown()
+    server.server_close()
